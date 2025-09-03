@@ -17,12 +17,12 @@ START_BALANCE = 500
 # --- DATA HANDLING ---
 def load_data():
     if not os.path.exists(DATA_FILE):
-        return {"balances": {}, "config": {}}
+        return {"balances": {}, "config": {}, "tickets": {}}
     try:
         with open(DATA_FILE, "r") as f:
             return json.load(f)
     except:
-        return {"balances": {}, "config": {}}
+        return {"balances": {}, "config": {}, "tickets": {}}
 
 def save_data():
     with open(DATA_FILE, "w") as f:
@@ -31,6 +31,7 @@ def save_data():
 data = load_data()
 balances = data.setdefault("balances", {})
 config = data.setdefault("config", {})
+tickets = data.setdefault("tickets", {})
 
 # --- ECONOMY HELPERS ---
 def get_wallet(uid): return balances.get(str(uid), {}).get("wallet", START_BALANCE)
@@ -52,8 +53,7 @@ def set_last_daily(uid, ts):
     balances[str(uid)]["last_daily"] = ts
     save_data()
 
-def add_wallet(uid, amt):
-    set_wallet(uid, get_wallet(uid) + amt)
+def add_wallet(uid, amt): set_wallet(uid, get_wallet(uid) + amt)
 
 # --- BOT SETUP ---
 intents = discord.Intents.default()
@@ -63,6 +63,13 @@ bot = commands.Bot(command_prefix="!", intents=intents)
 # --- AUTOSAVE ---
 @tasks.loop(seconds=60)
 async def autosave():
+    save_data()
+    # Bank interest: 2% hourly, capped at 10k
+    for uid, bal in balances.items():
+        interest = int(bal.get("bank", 0) * 0.02)
+        if interest > 0:
+            interest = min(interest, 10000)
+            bal["bank"] += interest
     save_data()
 
 # --- EVENTS ---
@@ -92,17 +99,17 @@ async def on_member_remove(member):
         if channel:
             await channel.send(f"👋 Goodbye {member.name}!")
 
-# --- CHANNEL SETUP ---
+# --- CHANNEL CONFIG ---
 @bot.tree.command(description="Set welcome channel")
 @app_commands.default_permissions(administrator=True)
-async def setwelcome(interaction: discord.Interaction, channel: discord.TextChannel):
+async def setwelcome(interaction, channel: discord.TextChannel):
     config["welcome_channel"] = channel.id
     save_data()
     await interaction.response.send_message(f"✅ Welcome channel set to {channel.mention}")
 
 @bot.tree.command(description="Set goodbye channel")
 @app_commands.default_permissions(administrator=True)
-async def setgoodbye(interaction: discord.Interaction, channel: discord.TextChannel):
+async def setgoodbye(interaction, channel: discord.TextChannel):
     config["goodbye_channel"] = channel.id
     save_data()
     await interaction.response.send_message(f"✅ Goodbye channel set to {channel.mention}")
@@ -110,37 +117,35 @@ async def setgoodbye(interaction: discord.Interaction, channel: discord.TextChan
 # --- MODERATION ---
 @bot.tree.command(description="Ban a member")
 @app_commands.default_permissions(ban_members=True)
-async def ban(interaction: discord.Interaction, member: discord.Member, reason: str = None):
+async def ban(interaction, member: discord.Member, reason: str = None):
     await member.ban(reason=reason)
     await interaction.response.send_message(f"🔨 Banned {member.mention}")
 
 @bot.tree.command(description="Kick a member")
 @app_commands.default_permissions(kick_members=True)
-async def kick(interaction: discord.Interaction, member: discord.Member, reason: str = None):
+async def kick(interaction, member: discord.Member, reason: str = None):
     await member.kick(reason=reason)
     await interaction.response.send_message(f"👢 Kicked {member.mention}")
 
 @bot.tree.command(description="Timeout (mute) a member")
 @app_commands.default_permissions(moderate_members=True)
-async def mute(interaction: discord.Interaction, member: discord.Member, seconds: int, reason: str = None):
+async def mute(interaction, member: discord.Member, seconds: int, reason: str = None):
     until = discord.utils.utcnow() + timedelta(seconds=seconds)
     await member.timeout(until, reason=reason)
     await interaction.response.send_message(f"🔇 Muted {member.mention} for {seconds}s")
 
-# --- FUN COMMANDS ---
+# --- FUN ---
 @bot.tree.command(description="Say something as the bot")
-async def say(interaction: discord.Interaction, *, text: str):
-    await interaction.response.send_message(text)
+async def say(interaction, *, text: str): await interaction.response.send_message(text)
 
 # --- ECONOMY ---
 @bot.tree.command(description="Check your balance")
-async def balance(interaction: discord.Interaction):
+async def balance(interaction):
     uid = interaction.user.id
-    wallet, bank = get_wallet(uid), get_bank(uid)
-    await interaction.response.send_message(f"💰 Wallet: ${wallet} | 🏦 Bank: ${bank}")
+    await interaction.response.send_message(f"💰 Wallet: ${get_wallet(uid)} | 🏦 Bank: ${get_bank(uid)}")
 
 @bot.tree.command(description="Daily reward")
-async def daily(interaction: discord.Interaction):
+async def daily(interaction):
     uid = interaction.user.id
     now = int(time.time())
     if now - get_last_daily(uid) < 86400:
@@ -151,141 +156,195 @@ async def daily(interaction: discord.Interaction):
     set_last_daily(uid, now)
     await interaction.response.send_message(f"🎁 You received ${reward} daily reward!")
 
-@bot.tree.command(description="Deposit money to bank")
-async def deposit(interaction: discord.Interaction, amount: int):
+@bot.tree.command(description="Work for money")
+async def work(interaction):
     uid = interaction.user.id
-    if amount <= 0 or amount > get_wallet(uid):
-        await interaction.response.send_message("❌ Invalid amount.")
+    reward = random.randint(50, 200)
+    add_wallet(uid, reward)
+    await interaction.response.send_message(f"👷 You worked and earned ${reward}!")
+
+@bot.tree.command(description="Rob another user")
+async def rob(interaction, member: discord.Member):
+    uid, target = interaction.user.id, member.id
+    if get_wallet(target) < 50:
+        await interaction.response.send_message("❌ Target too poor.")
         return
-    set_wallet(uid, get_wallet(uid) - amount)
-    set_bank(uid, get_bank(uid) + amount)
+    if random.random() < 0.5:
+        stolen = random.randint(20, get_wallet(target)//2)
+        set_wallet(target, get_wallet(target)-stolen)
+        add_wallet(uid, stolen)
+        await interaction.response.send_message(f"💀 You robbed {member.mention} and got ${stolen}!")
+    else:
+        fine = random.randint(20, 100)
+        set_wallet(uid, get_wallet(uid)-fine)
+        await interaction.response.send_message(f"🚓 You got caught! Lost ${fine}.")
+
+@bot.tree.command(description="Deposit money to bank")
+async def deposit(interaction, amount: int):
+    uid = interaction.user.id
+    if amount <= 0 or amount > get_wallet(uid): await interaction.response.send_message("❌ Invalid amount."); return
+    set_wallet(uid, get_wallet(uid)-amount); set_bank(uid, get_bank(uid)+amount)
     await interaction.response.send_message(f"🏦 Deposited ${amount}")
 
 @bot.tree.command(description="Withdraw money from bank")
-async def withdraw(interaction: discord.Interaction, amount: int):
+async def withdraw(interaction, amount: int):
     uid = interaction.user.id
-    if amount <= 0 or amount > get_bank(uid):
-        await interaction.response.send_message("❌ Invalid amount.")
-        return
-    set_bank(uid, get_bank(uid) - amount)
-    set_wallet(uid, get_wallet(uid) + amount)
+    if amount <= 0 or amount > get_bank(uid): await interaction.response.send_message("❌ Invalid amount."); return
+    set_bank(uid, get_bank(uid)-amount); set_wallet(uid, get_wallet(uid)+amount)
     await interaction.response.send_message(f"🏦 Withdrew ${amount}")
 
 @bot.tree.command(description="Send cash to another user")
-async def send(interaction: discord.Interaction, member: discord.Member, amount: int):
+async def send(interaction, member: discord.Member, amount: int):
     sender = interaction.user.id
-    if amount <= 0 or amount > get_wallet(sender):
-        await interaction.response.send_message("❌ Invalid amount.")
-        return
-    set_wallet(sender, get_wallet(sender) - amount)
-    add_wallet(member.id, amount)
+    if amount <= 0 or amount > get_wallet(sender): await interaction.response.send_message("❌ Invalid amount."); return
+    set_wallet(sender, get_wallet(sender)-amount); add_wallet(member.id, amount)
     await interaction.response.send_message(f"💸 Sent ${amount} to {member.mention}")
 
 @bot.tree.command(description="Show leaderboard")
-async def leaderboard(interaction: discord.Interaction):
-    top = sorted(balances.items(), key=lambda x: (x[1].get("wallet", 0) + x[1].get("bank", 0)), reverse=True)[:10]
+async def leaderboard(interaction):
+    top = sorted(balances.items(), key=lambda x: (x[1].get("wallet", 0)+x[1].get("bank", 0)), reverse=True)[:10]
     msg = "💰 **Leaderboard** 💰\n"
-    for i, (uid, bal) in enumerate(top, start=1):
-        total = bal.get("wallet", 0) + bal.get("bank", 0)
-        try:
-            user = await bot.fetch_user(int(uid))
-            msg += f"**{i}.** {user.name} — ${total}\n"
-        except:
-            msg += f"**{i}.** Unknown User — ${total}\n"
+    for i,(uid,bal) in enumerate(top,start=1):
+        total = bal.get("wallet",0)+bal.get("bank",0)
+        try: user = await bot.fetch_user(int(uid)); msg+=f"{i}. {user.name} — ${total}\n"
+        except: msg+=f"{i}. Unknown — ${total}\n"
     await interaction.response.send_message(msg)
 
-@bot.tree.command(description="Admin: Add cash to a user")
+@bot.tree.command(description="Admin: Add cash")
 @app_commands.default_permissions(administrator=True)
-async def addcash(interaction: discord.Interaction, member: discord.Member, amount: int):
-    if amount <= 0:
-        await interaction.response.send_message("❌ Amount must be positive.")
-        return
+async def addcash(interaction, member: discord.Member, amount: int):
+    if amount <= 0: await interaction.response.send_message("❌ Must be positive."); return
     add_wallet(member.id, amount)
     await interaction.response.send_message(f"💵 Added ${amount} to {member.mention}")
 
 # --- GAMES ---
-deck = [2,3,4,5,6,7,8,9,10,"J","Q","K","A"]
-
+# Blackjack
+def deal_card(): return random.choice([2,3,4,5,6,7,8,9,10,10,10,10,11])
 def hand_value(hand):
-    val, aces = 0, 0
-    for card in hand:
-        if card in ["J", "Q", "K"]: val += 10
-        elif card == "A": val, aces = val+11, aces+1
-        else: val += card
-    while val > 21 and aces: val, aces = val-10, aces-1
+    val = sum(hand)
+    aces = hand.count(11)
+    while val > 21 and aces: val-=10; aces-=1
     return val
 
 class BlackjackView(View):
-    def __init__(self, player, dealer, uid, bet):
-        super().__init__(timeout=30)
-        self.player, self.dealer, self.uid, self.bet = player, dealer, uid, bet, 
-        self.done = False
-
-    async def interaction_check(self, interaction): return interaction.user.id == self.uid
-
-    @discord.ui.button(label="Hit", style=discord.ButtonStyle.green)
-    async def hit(self, interaction, button: Button):
-        self.player.append(random.choice(deck))
-        if hand_value(self.player) > 21:
-            set_wallet(self.uid, get_wallet(self.uid) - self.bet)
-            await interaction.response.edit_message(content=f"💥 Bust! Your hand: {self.player} ({hand_value(self.player)})\nDealer: {self.dealer}\nYou lost ${self.bet}.", view=None)
-            self.stop()
-        else:
-            await interaction.response.edit_message(content=f"🃏 Your hand: {self.player} ({hand_value(self.player)})\nDealer shows: {self.dealer[0]}\nBet: ${self.bet}", view=self)
-
-    @discord.ui.button(label="Stand", style=discord.ButtonStyle.red)
-    async def stand(self, interaction, button: Button):
-        while hand_value(self.dealer) < 17: self.dealer.append(random.choice(deck))
-        pval, dval = hand_value(self.player), hand_value(self.dealer)
-        if dval > 21 or pval > dval: add_wallet(self.uid, self.bet); result=f"🎉 You win ${self.bet}!"
-        elif pval == dval: result="🤝 It's a tie!"
-        else: set_wallet(self.uid, get_wallet(self.uid) - self.bet); result=f"😢 Dealer wins. Lost ${self.bet}."
-        await interaction.response.edit_message(content=f"🃏 Your hand: {self.player} ({pval})\nDealer: {self.dealer} ({dval})\n{result}", view=None)
-        self.stop()
+    def __init__(self, player, bet): super().__init__(timeout=20); self.player=player; self.bet=bet; self.player_hand=[deal_card(),deal_card()]; self.dealer_hand=[deal_card(),deal_card()]
+    def hands(self): return f"Your hand: {self.player_hand} ({hand_value(self.player_hand)})\nDealer shows: {self.dealer_hand[0]}"
+    @discord.ui.button(label="Hit",style=discord.ButtonStyle.green)
+    async def hit(self,interaction,button): 
+        if interaction.user!=self.player: return await interaction.response.send_message("Not your game!",ephemeral=True)
+        self.player_hand.append(deal_card())
+        if hand_value(self.player_hand)>21: self.disable_all_items(); await interaction.response.edit_message(content=f"{self.hands()}\n💥 You busted! Lost ${self.bet}")
+        else: await interaction.response.edit_message(content=self.hands(),view=self)
+    @discord.ui.button(label="Stand",style=discord.ButtonStyle.red)
+    async def stand(self,interaction,button):
+        if interaction.user!=self.player: return await interaction.response.send_message("Not your game!",ephemeral=True)
+        while hand_value(self.dealer_hand)<17: self.dealer_hand.append(deal_card())
+        self.disable_all_items()
+        p,d=hand_value(self.player_hand),hand_value(self.dealer_hand)
+        if d>21 or p>d: add_wallet(self.player.id,self.bet*2); result=f"✅ You win ${self.bet}!"
+        elif p==d: add_wallet(self.player.id,self.bet); result="🤝 It's a tie."
+        else: result=f"❌ You lost ${self.bet}."
+        await interaction.response.edit_message(content=f"Your hand {self.player_hand} ({p})\nDealer {self.dealer_hand} ({d})\n{result}",view=self)
 
 @bot.tree.command(description="Play Blackjack")
-async def blackjack(interaction, bet: int):
-    uid = interaction.user.id
-    if bet <= 0 or bet > get_wallet(uid): await interaction.response.send_message("❌ Invalid bet."); return
-    player, dealer = [random.choice(deck), random.choice(deck)], [random.choice(deck)]
-    await interaction.response.send_message(f"🃏 Your hand: {player} ({hand_value(player)})\nDealer shows: {dealer[0]}\nBet: ${bet}", view=BlackjackView(player,dealer,uid,bet))
+async def blackjack(interaction, bet:int):
+    uid=interaction.user.id
+    if bet<=0 or bet>get_wallet(uid): return await interaction.response.send_message("❌ Invalid bet.")
+    set_wallet(uid,get_wallet(uid)-bet)
+    view=BlackjackView(interaction.user,bet)
+    await interaction.response.send_message(view.hands(),view=view)
 
-@bot.tree.command(description="Play roulette (red/black/green)")
-async def roulette(interaction, bet: int, choice: str):
-    uid = interaction.user.id
-    if bet <= 0 or bet > get_wallet(uid): await interaction.response.send_message("❌ Invalid bet."); return
-    result = random.choice(["red","black"]*7+["green"])
-    if choice.lower()==result:
-        payout = bet*14 if result=="green" else bet*2
-        add_wallet(uid,payout); msg=f"🎉 It landed on {result}! You won ${payout}."
-    else: set_wallet(uid,get_wallet(uid)-bet); msg=f"😢 It landed on {result}. You lost ${bet}."
-    await interaction.response.send_message(msg+f"\n💰 Wallet: ${get_wallet(uid)}")
+# Roulette
+@bot.tree.command(description="Roulette (red/black)")
+async def roulette(interaction, color:str, bet:int):
+    uid=interaction.user.id
+    if bet<=0 or bet>get_wallet(uid): return await interaction.response.send_message("❌ Invalid bet.")
+    color=color.lower(); if color not in ["red","black"]: return await interaction.response.send_message("❌ Choose red/black.")
+    set_wallet(uid,get_wallet(uid)-bet)
+    result=random.choice(["red","black"])
+    if result==color: add_wallet(uid,bet*2); await interaction.response.send_message(f"🎡 Ball landed {result}! You win ${bet}")
+    else: await interaction.response.send_message(f"🎡 Ball landed {result}! You lose ${bet}")
 
-@bot.tree.command(description="Play coinflip (heads/tails)")
-async def coinflip(interaction, bet: int, guess: str):
-    uid = interaction.user.id
-    if bet <= 0 or bet > get_wallet(uid): await interaction.response.send_message("❌ Invalid bet."); return
-    result = random.choice(["heads","tails"])
-    if guess.lower()==result: add_wallet(uid,bet); msg=f"🪙 It was {result}! You won ${bet}!"
-    else: set_wallet(uid,get_wallet(uid)-bet); msg=f"🪙 It was {result}. You lost ${bet}."
-    await interaction.response.send_message(msg)
+# Coinflip
+@bot.tree.command(description="Coinflip heads/tails")
+async def coinflip(interaction, guess:str, bet:int):
+    uid=interaction.user.id
+    if bet<=0 or bet>get_wallet(uid): return await interaction.response.send_message("❌ Invalid bet.")
+    guess=guess.lower(); if guess not in ["heads","tails"]: return await interaction.response.send_message("❌ Must be heads/tails.")
+    set_wallet(uid,get_wallet(uid)-bet)
+    result=random.choice(["heads","tails"])
+    if result==guess: add_wallet(uid,bet*2); await interaction.response.send_message(f"🪙 It was {result}! You win ${bet}")
+    else: await interaction.response.send_message(f"🪙 It was {result}! You lose ${bet}")
 
+# Slots
 @bot.tree.command(description="Play slots")
-async def slots(interaction, bet: int):
-    uid = interaction.user.id
-    if bet <= 0 or bet > get_wallet(uid): await interaction.response.send_message("❌ Invalid bet."); return
-    symbols = ["🍒","🍋","🔔","⭐","7️⃣"]
-    result = [random.choice(symbols) for _ in range(3)]
-    msg = "🎰 " + " | ".join(result)
-    if len(set(result))==1: payout=bet*5; add_wallet(uid,payout); msg+=f"\n🎉 JACKPOT! You won ${payout}!"
-    elif len(set(result))==2: payout=bet*2; add_wallet(uid,payout); msg+=f"\n✨ Two match! You won ${payout}!"
-    else: set_wallet(uid,get_wallet(uid)-bet); msg+=f"\n😢 You lost ${bet}."
-    await interaction.response.send_message(msg)
+async def slots(interaction, bet:int):
+    uid=interaction.user.id
+    if bet<=0 or bet>get_wallet(uid): return await interaction.response.send_message("❌ Invalid bet.")
+    set_wallet(uid,get_wallet(uid)-bet)
+    symbols=["🍒","🍋","🔔","⭐","7️⃣"]
+    roll=[random.choice(symbols) for _ in range(3)]
+    if len(set(roll))==1: add_wallet(uid,bet*5); res=f"🎰 {' '.join(roll)} JACKPOT! Won ${bet*5}"
+    elif len(set(roll))==2: add_wallet(uid,bet*2); res=f"🎰 {' '.join(roll)} Nice! Won ${bet*2}"
+    else: res=f"🎰 {' '.join(roll)} Lost ${bet}"
+    await interaction.response.send_message(res)
+
+# Dice
+@bot.tree.command(description="Dice roll (2-12)")
+async def dice(interaction, guess:int, bet:int):
+    uid=interaction.user.id
+    if bet<=0 or bet>get_wallet(uid): return await interaction.response.send_message("❌ Invalid bet.")
+    if guess<2 or guess>12: return await interaction.response.send_message("❌ Guess between 2-12.")
+    set_wallet(uid,get_wallet(uid)-bet)
+    roll=random.randint(1,6)+random.randint(1,6)
+    if roll==guess: add_wallet(uid,bet*6); res=f"🎲 Rolled {roll}! You win ${bet*6}"
+    else: res=f"🎲 Rolled {roll}! You lose ${bet}"
+    await interaction.response.send_message(res)
+
+# HighLow
+@bot.tree.command(description="HighLow (guess next card)")
+async def highlow(interaction, bet:int, guess:str):
+    uid=interaction.user.id
+    if bet<=0 or bet>get_wallet(uid): return await interaction.response.send_message("❌ Invalid bet.")
+    guess=guess.lower(); if guess not in ["high","low"]: return await interaction.response.send_message("❌ Guess high/low.")
+    set_wallet(uid,get_wallet(uid)-bet)
+    card=random.randint(1,13); next_card=random.randint(1,13)
+    win=(next_card>card and guess=="high") or (next_card<card and guess=="low")
+    if win: add_wallet(uid,bet*2); res=f"🃏 Card {card}, next {next_card}. You win ${bet}"
+    else: res=f"🃏 Card {card}, next {next_card}. You lose ${bet}"
+    await interaction.response.send_message(res)
+
+# --- TICKET LOGGING ---
+def log_ticket(channel_id, staff_id):
+    ch = tickets.setdefault(str(channel_id), {})
+    ch[str(staff_id)] = ch.get(str(staff_id), 0) + 1
+    save_data()
+
+@bot.tree.command(description="Show ticket logs")
+@app_commands.default_permissions(administrator=True)
+async def ticketlog(interaction, channel: discord.TextChannel = None):
+    if channel:
+        ch_data = tickets.get(str(channel.id), {})
+        if not ch_data: await interaction.response.send_message("No tickets logged here."); return
+        msg = f"🎫 Ticket log for {channel.mention}\n"
+        for sid,count in ch_data.items():
+            try: staff = await bot.fetch_user(int(sid)); msg+=f"{staff.name}: {count}\n"
+            except: msg+=f"Unknown {sid}: {count}\n"
+        await interaction.response.send_message(msg)
+    else:
+        msg="🎫 **All Ticket Logs**\n"
+        for ch_id,ch_data in tickets.items():
+            ch=bot.get_channel(int(ch_id)); ch_name=ch.name if ch else f"Channel {ch_id}"
+            msg+=f"\n**{ch_name}**\n"
+            for sid,count in ch_data.items():
+                try: staff=await bot.fetch_user(int(sid)); msg+=f"{staff.name}: {count}\n"
+                except: msg+=f"Unknown {sid}: {count}\n"
+        await interaction.response.send_message(msg)
 
 # --- PREFIX HELP ---
 @bot.command()
 async def cmds(ctx):
-    await ctx.send("📜 Commands: /ban /kick /mute /say /balance /daily /deposit /withdraw /send /leaderboard /addcash /blackjack /roulette /coinflip /slots /setwelcome /setgoodbye")
+    await ctx.send("📜 Use `/` slash commands for moderation, economy, casino, tickets")
 
 # --- RUN ---
 bot.run(TOKEN)
