@@ -182,6 +182,15 @@ async def leaderboard(interaction: discord.Interaction):
             msg += f"**{i}.** Unknown User — ${total}\n"
     await interaction.response.send_message(msg)
 
+@bot.tree.command(description="Admin: Add cash to a user")
+@app_commands.default_permissions(administrator=True)
+async def addcash(interaction: discord.Interaction, member: discord.Member, amount: int):
+    if amount <= 0:
+        await interaction.response.send_message("❌ Amount must be positive.")
+        return
+    add_wallet(member.id, amount)
+    await interaction.response.send_message(f"💵 Added ${amount} to {member.mention}")
+
 # --- GAMES ---
 def hand_value(hand):
     val, aces = 0, 0
@@ -197,6 +206,63 @@ def hand_value(hand):
         val -= 10
         aces -= 1
     return val
+
+deck = [2,3,4,5,6,7,8,9,10,"J","Q","K","A"]
+
+class BlackjackView(View):
+    def __init__(self, player, dealer, uid, bet):
+        super().__init__(timeout=30)
+        self.player = player
+        self.dealer = dealer
+        self.uid = uid
+        self.bet = bet
+        self.done = False
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        return interaction.user.id == self.uid
+
+    @discord.ui.button(label="Hit", style=discord.ButtonStyle.green)
+    async def hit(self, interaction: discord.Interaction, button: Button):
+        self.player.append(random.choice(deck))
+        if hand_value(self.player) > 21:
+            set_wallet(self.uid, get_wallet(self.uid) - self.bet)
+            await interaction.response.edit_message(content=f"💥 Bust! Your hand: {self.player} ({hand_value(self.player)})\nDealer: {self.dealer}\nYou lost ${self.bet}.", view=None)
+            self.done = True
+            self.stop()
+        else:
+            await interaction.response.edit_message(content=f"🃏 Your hand: {self.player} ({hand_value(self.player)})\nDealer shows: {self.dealer[0]}\nBet: ${self.bet}", view=self)
+
+    @discord.ui.button(label="Stand", style=discord.ButtonStyle.red)
+    async def stand(self, interaction: discord.Interaction, button: Button):
+        while hand_value(self.dealer) < 17:
+            self.dealer.append(random.choice(deck))
+
+        pval, dval = hand_value(self.player), hand_value(self.dealer)
+        result = ""
+        if dval > 21 or pval > dval:
+            add_wallet(self.uid, self.bet)
+            result = f"🎉 You win ${self.bet}!"
+        elif pval == dval:
+            result = "🤝 It's a tie! Bet returned."
+        else:
+            set_wallet(self.uid, get_wallet(self.uid) - self.bet)
+            result = f"😢 Dealer wins. You lost ${self.bet}."
+
+        await interaction.response.edit_message(content=f"🃏 Your hand: {self.player} ({pval})\nDealer: {self.dealer} ({dval})\n{result}", view=None)
+        self.done = True
+        self.stop()
+
+@bot.tree.command(description="Play Blackjack")
+async def blackjack(interaction: discord.Interaction, bet: int):
+    uid = interaction.user.id
+    if bet <= 0 or bet > get_wallet(uid):
+        await interaction.response.send_message("❌ Invalid bet.")
+        return
+
+    player = [random.choice(deck), random.choice(deck)]
+    dealer = [random.choice(deck)]
+    view = BlackjackView(player, dealer, uid, bet)
+    await interaction.response.send_message(f"🃏 Your hand: {player} ({hand_value(player)})\nDealer shows: {dealer[0]}\nBet: ${bet}", view=view)
 
 @bot.tree.command(description="Play roulette (red/black/green)")
 async def roulette(interaction: discord.Interaction, bet: int, choice: str):
@@ -224,7 +290,7 @@ async def roulette(interaction: discord.Interaction, bet: int, choice: str):
 # --- PREFIX COMMANDS ---
 @bot.command()
 async def cmds(ctx):
-    await ctx.send("📜 Commands: /ban /kick /mute /say /balance /daily /deposit /withdraw /send /leaderboard /roulette /blackjack ...")
+    await ctx.send("📜 Commands: /ban /kick /mute /say /balance /daily /deposit /withdraw /send /leaderboard /addcash /blackjack /roulette")
 
 # --- RUN ---
 bot.run(TOKEN)
