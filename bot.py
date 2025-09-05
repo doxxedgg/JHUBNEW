@@ -1,319 +1,612 @@
 import discord
 from discord import app_commands
 from discord.ext import commands
-from discord.ui import Button, View
+from discord.ui import View, Button
 import random, time, json, os
+from datetime import timedelta
 
+# =========================
+# Config
+# =========================
 TOKEN = os.environ.get("DISCORD_TOKEN")
 DATA_FILE = "data.json"
 START_BALANCE = 500
 
-# --- Data Setup ---
+# =========================
+# Data setup (auto-create)
+# =========================
 if not os.path.exists(DATA_FILE):
     with open(DATA_FILE, "w") as f:
-        json.dump({"balances": {}, "config": {}, "tickets": {}}, f)
+        json.dump(
+            {
+                "balances": {},
+                "config": {},
+                "tickets": {},       # ticket_channel_id -> { opener_id, opened_at }
+                "ticket_counts": {}  # staff_id -> count
+            },
+            f
+        )
 
 with open(DATA_FILE, "r") as f:
     data = json.load(f)
 
-balances = data.setdefault("balances", {})
-config = data.setdefault("config", {})
-tickets = data.setdefault("tickets", {})
+balances: dict = data.setdefault("balances", {})
+config: dict = data.setdefault("config", {})
+tickets: dict = data.setdefault("tickets", {})
+ticket_counts: dict = data.setdefault("ticket_counts", {})
 
 def save_data():
     with open(DATA_FILE, "w") as f:
         json.dump(data, f, indent=4)
 
-def get_wallet(uid): return balances.get(str(uid), {}).get("wallet", START_BALANCE)
-def get_bank(uid): return balances.get(str(uid), {}).get("bank", 0)
-
 def ensure_user(uid):
-    balances.setdefault(str(uid), {"wallet": START_BALANCE, "bank": 0, "last_daily": 0, "last_work": 0, "last_steal": 0})
+    uid = str(uid)
+    balances.setdefault(uid, {
+        "wallet": START_BALANCE,
+        "bank": 0,
+        "last_daily": 0,
+        "last_work": 0,
+        "last_steal": 0
+    })
+    return balances[uid]
 
+def get_wallet(uid): return ensure_user(uid)["wallet"]
+def get_bank(uid): return ensure_user(uid)["bank"]
 def set_wallet(uid, amt):
-    ensure_user(uid)
-    balances[str(uid)]["wallet"] = amt
-    save_data()
-
+    ensure_user(uid)["wallet"] = int(amt); save_data()
 def set_bank(uid, amt):
-    ensure_user(uid)
-    balances[str(uid)]["bank"] = amt
-    save_data()
+    ensure_user(uid)["bank"] = int(amt); save_data()
+def add_wallet(uid, amt):
+    u = ensure_user(uid); u["wallet"] = int(u["wallet"] + int(amt)); save_data()
 
-def add_wallet(uid, amt): set_wallet(uid, get_wallet(uid) + amt)
-
-# --- Bot Setup ---
+# =========================
+# Bot setup
+# =========================
 intents = discord.Intents.default()
 intents.members = True
+intents.message_content = False  # we only need prefix for !cmds
 bot = commands.Bot(command_prefix="!", intents=intents)
 
-def make_embed(title, description, color=discord.Color.blurple()):
-    return discord.Embed(title=title, description=description, color=color)
+def emb(title, desc, color=discord.Color.blurple()):
+    return discord.Embed(title=title, description=desc, color=color)
 
-# --- Events ---
+# =========================
+# Events
+# =========================
 @bot.event
 async def on_ready():
     await bot.tree.sync()
-    print(f"✅ Logged in as {bot.user}")
+    print(f"✅ Logged in as {bot.user} | Slash commands synced.")
 
 @bot.event
-async def on_member_join(member):
-    if (ch_id := config.get("welcome_channel")):
+async def on_member_join(member: discord.Member):
+    ch_id = config.get("welcome_channel")
+    if ch_id:
         ch = bot.get_channel(ch_id)
         if ch:
-            await ch.send(embed=make_embed("👋 Welcome!", f"Welcome {member.mention}!"))
+            await ch.send(embed=emb("🎉 Welcome!", f"Welcome {member.mention}!"))
 
 @bot.event
-async def on_member_remove(member):
-    if (ch_id := config.get("goodbye_channel")):
+async def on_member_remove(member: discord.Member):
+    ch_id = config.get("goodbye_channel")
+    if ch_id:
         ch = bot.get_channel(ch_id)
         if ch:
-            await ch.send(embed=make_embed("😢 Goodbye", f"{member.mention} has left the server."))
+            await ch.send(embed=emb("👋 Goodbye", f"{member.mention} has left the server."))
 
-# --- Moderation ---
-@bot.tree.command(description="Ban a user")
-@app_commands.default_permissions(ban_members=True)
-async def ban(interaction, member: discord.Member, reason: str = "No reason"):
-    await member.ban(reason=reason)
-    await interaction.response.send_message(embed=make_embed("🔨 Banned", f"{member} was banned. Reason: {reason}"))
-
-@bot.tree.command(description="Kick a user")
-@app_commands.default_permissions(kick_members=True)
-async def kick(interaction, member: discord.Member, reason: str = "No reason"):
-    await member.kick(reason=reason)
-    await interaction.response.send_message(embed=make_embed("👢 Kicked", f"{member} was kicked. Reason: {reason}"))
-
-# --- Welcome/Goodbye Config ---
-@bot.tree.command(description="Set welcome channel")
+# =========================
+# Basic config commands
+# =========================
+@bot.tree.command(description="Set the welcome channel")
 @app_commands.default_permissions(administrator=True)
-async def setwelcome(interaction, channel: discord.TextChannel):
+async def setwelcome(interaction: discord.Interaction, channel: discord.TextChannel):
     config["welcome_channel"] = channel.id
     save_data()
-    await interaction.response.send_message(embed=make_embed("✅ Success", f"Welcome channel set to {channel.mention}"))
+    await interaction.response.send_message(embed=emb("✅ Set", f"Welcome channel → {channel.mention}"))
 
-@bot.tree.command(description="Set goodbye channel")
+@bot.tree.command(description="Set the goodbye channel")
 @app_commands.default_permissions(administrator=True)
-async def setgoodbye(interaction, channel: discord.TextChannel):
+async def setgoodbye(interaction: discord.Interaction, channel: discord.TextChannel):
     config["goodbye_channel"] = channel.id
     save_data()
-    await interaction.response.send_message(embed=make_embed("✅ Success", f"Goodbye channel set to {channel.mention}"))
+    await interaction.response.send_message(embed=emb("✅ Set", f"Goodbye channel → {channel.mention}"))
 
-# --- Economy ---
-@bot.tree.command(description="Check your balance")
-async def balance(interaction):
-    uid = str(interaction.user.id)
-    ensure_user(uid)
-    await interaction.response.send_message(embed=make_embed("💰 Balance", f"Wallet: ${get_wallet(uid)}\nBank: ${get_bank(uid)}"))
+# =========================
+# Moderation
+# =========================
+@bot.tree.command(description="Ban a member")
+@app_commands.default_permissions(ban_members=True)
+async def ban(interaction: discord.Interaction, member: discord.Member, reason: str = "No reason provided"):
+    await member.ban(reason=reason)
+    await interaction.response.send_message(embed=emb("🔨 Ban", f"{member.mention} was banned.\nReason: {reason}"))
 
-@bot.tree.command(description="Deposit money into bank")
-async def deposit(interaction, amount: int):
-    uid = str(interaction.user.id)
-    ensure_user(uid)
-    if amount > get_wallet(uid): return await interaction.response.send_message(embed=make_embed("❌ Error", "Not enough in wallet."))
-    add_wallet(uid, -amount); set_bank(uid, get_bank(uid)+amount)
-    await interaction.response.send_message(embed=make_embed("🏦 Deposit", f"Deposited ${amount}."))
+@bot.tree.command(description="Kick a member")
+@app_commands.default_permissions(kick_members=True)
+async def kick(interaction: discord.Interaction, member: discord.Member, reason: str = "No reason provided"):
+    await member.kick(reason=reason)
+    await interaction.response.send_message(embed=emb("👢 Kick", f"{member.mention} was kicked.\nReason: {reason}"))
 
-@bot.tree.command(description="Withdraw money from bank")
-async def withdraw(interaction, amount: int):
-    uid = str(interaction.user.id)
-    ensure_user(uid)
-    if amount > get_bank(uid): return await interaction.response.send_message(embed=make_embed("❌ Error", "Not enough in bank."))
-    set_bank(uid, get_bank(uid)-amount); add_wallet(uid, amount)
-    await interaction.response.send_message(embed=make_embed("🏦 Withdraw", f"Withdrew ${amount}."))
+@bot.tree.command(description="Mute a member (timeout in minutes)")
+@app_commands.default_permissions(moderate_members=True)
+async def mute(interaction: discord.Interaction, member: discord.Member, minutes: int, reason: str = "No reason"):
+    until = discord.utils.utcnow() + timedelta(minutes=minutes)
+    await member.timeout(until, reason=reason)
+    await interaction.response.send_message(embed=emb("🔇 Mute", f"{member.mention} muted for {minutes}m.\nReason: {reason}"))
 
-@bot.tree.command(description="Send money to another player")
-async def send(interaction, member: discord.Member, amount: int):
-    uid, tid = str(interaction.user.id), str(member.id)
-    ensure_user(uid); ensure_user(tid)
-    if amount > get_wallet(uid): return await interaction.response.send_message(embed=make_embed("❌ Error", "Not enough to send."))
-    add_wallet(uid, -amount); add_wallet(tid, amount)
-    await interaction.response.send_message(embed=make_embed("💸 Transfer", f"Sent ${amount} to {member.mention}"))
+@bot.tree.command(description="Unmute a member")
+@app_commands.default_permissions(moderate_members=True)
+async def unmute(interaction: discord.Interaction, member: discord.Member):
+    await member.timeout(None)
+    await interaction.response.send_message(embed=emb("🔈 Unmute", f"{member.mention} has been unmuted."))
 
-@bot.tree.command(description="Leaderboard")
-async def leaderboard(interaction):
-    top = sorted(balances.items(), key=lambda x: x[1].get("wallet",0)+x[1].get("bank",0), reverse=True)[:10]
-    desc = "\n".join([f"{i+1}. <@{uid}> - ${vals['wallet']+vals['bank']}" for i,(uid,vals) in enumerate(top)])
-    await interaction.response.send_message(embed=make_embed("🏆 Leaderboard", desc))
+@bot.tree.command(description="Change a member's nickname")
+@app_commands.default_permissions(manage_nicknames=True)
+async def nick(interaction: discord.Interaction, member: discord.Member, new_nick: str):
+    await member.edit(nick=new_nick)
+    await interaction.response.send_message(embed=emb("✏️ Nickname", f"{member.mention}'s nickname changed to **{new_nick}**."))
 
-# --- Cooldowns: Work & Steal ---
-@bot.tree.command(description="Work for cash (8m cooldown)")
-async def work(interaction):
-    uid = str(interaction.user.id)
-    ensure_user(uid)
+@bot.tree.command(description="Make the bot repeat something")
+@app_commands.default_permissions(manage_messages=True)
+async def say(interaction: discord.Interaction, message: str):
+    await interaction.response.send_message(embed=emb("📣 Say", "Sent."), ephemeral=True)
+    await interaction.channel.send(message)
+
+@bot.tree.command(description="Add a role to a member")
+@app_commands.default_permissions(manage_roles=True)
+async def addrole(interaction: discord.Interaction, member: discord.Member, role: discord.Role):
+    await member.add_roles(role)
+    await interaction.response.send_message(embed=emb("➕ Role", f"Added {role.mention} to {member.mention}"))
+
+@bot.tree.command(description="Remove a role from a member")
+@app_commands.default_permissions(manage_roles=True)
+async def removerole(interaction: discord.Interaction, member: discord.Member, role: discord.Role):
+    await member.remove_roles(role)
+    await interaction.response.send_message(embed=emb("➖ Role", f"Removed {role.mention} from {member.mention}"))
+
+# =========================
+# Economy
+# =========================
+@bot.tree.command(description="Check balance (optionally another user's)")
+async def balance(interaction: discord.Interaction, member: discord.Member | None = None):
+    member = member or interaction.user
+    u = ensure_user(member.id)
+    await interaction.response.send_message(embed=emb("💰 Balance", f"{member.mention}\nWallet: ${u['wallet']}\nBank: ${u['bank']}"))
+
+@bot.tree.command(description="Claim daily reward (24h)")
+async def daily(interaction: discord.Interaction):
+    u = ensure_user(interaction.user.id)
     now = int(time.time())
-    if now - balances[uid]["last_work"] < 480:
-        rem = 480 - (now - balances[uid]["last_work"])
-        return await interaction.response.send_message(embed=make_embed("⏳ Cooldown", f"Wait {rem//60}m {rem%60}s."), ephemeral=True)
-    earnings = random.randint(50,150)
-    add_wallet(uid, earnings)
-    balances[uid]["last_work"] = now; save_data()
-    await interaction.response.send_message(embed=make_embed("💼 Work", f"You earned ${earnings}"))
+    if now - u["last_daily"] < 86400:
+        remaining = 86400 - (now - u["last_daily"])
+        return await interaction.response.send_message(
+            embed=emb("⏳ Daily Cooldown", f"Come back in {remaining//3600}h {(remaining%3600)//60}m."),
+            ephemeral=True
+        )
+    reward = random.randint(150, 300)
+    add_wallet(interaction.user.id, reward)
+    u["last_daily"] = now; save_data()
+    await interaction.response.send_message(embed=emb("🎁 Daily", f"You received **${reward}**!"))
 
-@bot.tree.command(description="Steal from a player (15m cooldown)")
-async def steal(interaction, member: discord.Member):
-    uid, tid = str(interaction.user.id), str(member.id)
-    ensure_user(uid); ensure_user(tid)
+@bot.tree.command(description="Work for money (8 minute cooldown)")
+async def work(interaction: discord.Interaction):
+    u = ensure_user(interaction.user.id)
     now = int(time.time())
-    if now - balances[uid]["last_steal"] < 900:
-        rem = 900 - (now - balances[uid]["last_steal"])
-        return await interaction.response.send_message(embed=make_embed("⏳ Cooldown", f"Wait {rem//60}m {rem%60}s."), ephemeral=True)
-    if get_wallet(tid) < 50: return await interaction.response.send_message(embed=make_embed("❌ Error", "Target too poor."))
-    if random.random()<0.5:
-        amt = random.randint(20, min(100,get_wallet(tid)))
-        add_wallet(uid, amt); add_wallet(tid, -amt)
-        res = f"💰 You stole ${amt} from {member.mention}!"
+    if now - u["last_work"] < 480:
+        remaining = 480 - (now - u["last_work"])
+        return await interaction.response.send_message(
+            embed=emb("⏳ Work Cooldown", f"Wait {remaining//60}m {remaining%60}s."),
+            ephemeral=True
+        )
+    earnings = random.randint(60, 160)
+    add_wallet(interaction.user.id, earnings)
+    u["last_work"] = now; save_data()
+    await interaction.response.send_message(embed=emb("💼 Work", f"You earned **${earnings}**!"))
+
+@bot.tree.command(description="Steal from someone (15 minute cooldown)")
+async def steal(interaction: discord.Interaction, member: discord.Member):
+    if member.id == interaction.user.id:
+        return await interaction.response.send_message(embed=emb("❌ Error", "You can't steal from yourself."), ephemeral=True)
+    u = ensure_user(interaction.user.id)
+    t = ensure_user(member.id)
+    now = int(time.time())
+    if now - u["last_steal"] < 900:
+        remaining = 900 - (now - u["last_steal"])
+        return await interaction.response.send_message(
+            embed=emb("⏳ Steal Cooldown", f"Wait {remaining//60}m {remaining%60}s."),
+            ephemeral=True
+        )
+    if t["wallet"] < 50:
+        return await interaction.response.send_message(embed=emb("❌ Failed", "Target is too poor."), ephemeral=True)
+
+    if random.random() < 0.5:
+        amt = random.randint(20, min(120, t["wallet"]))
+        add_wallet(interaction.user.id, amt)
+        add_wallet(member.id, -amt)
+        msg = f"💰 You stole **${amt}** from {member.mention}!"
     else:
-        fine = random.randint(20,100); add_wallet(uid,-fine)
-        res = f"🚓 Caught! You paid ${fine}."
-    balances[uid]["last_steal"] = now; save_data()
-    await interaction.response.send_message(embed=make_embed("🕵️ Steal", res))
+        fine = random.randint(20, 100)
+        add_wallet(interaction.user.id, -fine)
+        msg = f"🚓 You were caught and fined **${fine}**."
 
-# --- Admin Cash Resets (with logging) ---
-@bot.tree.command(description="Reset a player's cash")
-@app_commands.default_permissions(administrator=True)
-async def resetcash(interaction, member: discord.Member):
-    set_wallet(member.id, START_BALANCE); set_bank(member.id, 0)
-    msg = f"{member.mention}'s cash reset."
-    if (ch_id:=config.get("ticket_log_channel")) and (ch:=bot.get_channel(ch_id)):
-        await ch.send(embed=make_embed("♻️ Reset Log", f"{interaction.user.mention} reset {member.mention}'s cash."))
-    await interaction.response.send_message(embed=make_embed("♻️ Reset Cash", msg))
+    u["last_steal"] = now; save_data()
+    await interaction.response.send_message(embed=emb("🕵️ Steal", msg))
 
-@bot.tree.command(description="Reset everyone's cash")
-@app_commands.default_permissions(administrator=True)
-async def resetcashall(interaction):
-    for uid in balances: set_wallet(uid, START_BALANCE); set_bank(uid,0)
-    if (ch_id:=config.get("ticket_log_channel")) and (ch:=bot.get_channel(ch_id)):
-        await ch.send(embed=make_embed("♻️ Reset Log", f"{interaction.user.mention} reset ALL balances."))
-    await interaction.response.send_message(embed=make_embed("♻️ Reset Cash", "All balances reset."))
+@bot.tree.command(description="Deposit to bank")
+async def deposit(interaction: discord.Interaction, amount: int):
+    if amount <= 0 or get_wallet(interaction.user.id) < amount:
+        return await interaction.response.send_message(embed=emb("❌ Error", "Invalid amount."), ephemeral=True)
+    add_wallet(interaction.user.id, -amount)
+    set_bank(interaction.user.id, get_bank(interaction.user.id) + amount)
+    await interaction.response.send_message(embed=emb("🏦 Deposit", f"Deposited **${amount}**."))
 
-# --- Add Cash Command ---
-@bot.tree.command(description="Admin: Add cash to a player's wallet")
+@bot.tree.command(description="Withdraw from bank")
+async def withdraw(interaction: discord.Interaction, amount: int):
+    if amount <= 0 or get_bank(interaction.user.id) < amount:
+        return await interaction.response.send_message(embed=emb("❌ Error", "Invalid amount."), ephemeral=True)
+    set_bank(interaction.user.id, get_bank(interaction.user.id) - amount)
+    add_wallet(interaction.user.id, amount)
+    await interaction.response.send_message(embed=emb("🏦 Withdraw", f"Withdrew **${amount}**."))
+
+@bot.tree.command(description="Send cash to someone")
+async def send(interaction: discord.Interaction, member: discord.Member, amount: int):
+    if amount <= 0:
+        return await interaction.response.send_message(embed=emb("❌ Error", "Amount must be > 0."), ephemeral=True)
+    if get_wallet(interaction.user.id) < amount:
+        return await interaction.response.send_message(embed=emb("❌ Error", "Not enough funds."), ephemeral=True)
+    add_wallet(interaction.user.id, -amount)
+    add_wallet(member.id, amount)
+    await interaction.response.send_message(embed=emb("💸 Transfer", f"Sent **${amount}** to {member.mention}."))
+
+@bot.tree.command(description="Top balances")
+async def leaderboard(interaction: discord.Interaction):
+    tops = sorted(
+        balances.items(),
+        key=lambda kv: kv[1].get("wallet", 0) + kv[1].get("bank", 0),
+        reverse=True
+    )[:10]
+    if not tops:
+        return await interaction.response.send_message(embed=emb("🏆 Leaderboard", "No players yet."))
+    lines = []
+    for i, (uid, vals) in enumerate(tops, start=1):
+        total = vals.get("wallet", 0) + vals.get("bank", 0)
+        lines.append(f"{i}. <@{uid}> — ${total}")
+    await interaction.response.send_message(embed=emb("🏆 Leaderboard", "\n".join(lines)))
+
+# =========================
+# Admin economy (with logging)
+# =========================
+def get_log_channel():
+    ch_id = config.get("ticket_log_channel")
+    return bot.get_channel(ch_id) if ch_id else None
+
+@bot.tree.command(description="Admin: Add or remove cash from a user (+/-)")
 @app_commands.default_permissions(administrator=True)
-async def addcash(interaction, member: discord.Member, amount: int):
+async def addcash(interaction: discord.Interaction, member: discord.Member, amount: int):
     if amount == 0:
-        await interaction.response.send_message(embed=make_embed("❌ Error", "Amount must not be 0."), ephemeral=True)
-        return
-
+        return await interaction.response.send_message(embed=emb("❌ Error", "Amount cannot be 0."), ephemeral=True)
     add_wallet(member.id, amount)
     action = "added to" if amount > 0 else "removed from"
     msg = f"${abs(amount)} {action} {member.mention}'s wallet."
+    log = get_log_channel()
+    if log:
+        await log.send(embed=emb("💰 Cash Adjustment", f"Admin {interaction.user.mention} {action} **${abs(amount)}** for {member.mention}."))
+    await interaction.response.send_message(embed=emb("💰 Cash Adjusted", msg))
 
-    # Log to ticket_log_channel if set
-    log_ch = bot.get_channel(config.get("ticket_log_channel"))
-    if log_ch:
-        await log_ch.send(embed=make_embed("💰 Cash Adjustment Log", f"Admin {interaction.user.mention} {action} {abs(amount)} for {member.mention}."))
+@bot.tree.command(description="Admin: Reset one player's cash")
+@app_commands.default_permissions(administrator=True)
+async def resetcash(interaction: discord.Interaction, member: discord.Member):
+    set_wallet(member.id, START_BALANCE)
+    set_bank(member.id, 0)
+    log = get_log_channel()
+    if log:
+        await log.send(embed=emb("♻️ Reset Cash Log", f"{interaction.user.mention} reset {member.mention}'s cash."))
+    await interaction.response.send_message(embed=emb("♻️ Reset Cash", f"{member.mention}'s cash was reset."))
 
-    await interaction.response.send_message(embed=make_embed("💰 Cash Adjusted", msg))
+@bot.tree.command(description="Admin: Reset ALL players' cash")
+@app_commands.default_permissions(administrator=True)
+async def resetcashall(interaction: discord.Interaction):
+    for uid in list(balances.keys()):
+        set_wallet(uid, START_BALANCE)
+        set_bank(uid, 0)
+    log = get_log_channel()
+    if log:
+        await log.send(embed=emb("♻️ Reset Cash Log", f"{interaction.user.mention} reset **ALL** players' cash."))
+    await interaction.response.send_message(embed=emb("♻️ Reset Cash", "All players' cash reset."))
 
+# =========================
+# Casino
+# =========================
+# Blackjack
+deck = [str(x) for x in range(2, 11)] + ["J", "Q", "K", "A"]
 
-
-# --- Casino: Blackjack ---
-deck = [str(x) for x in range(2,11)] + ["J","Q","K","A"]
-def calc_blackjack(cards):
-    total, aces = 0,0
+def bj_total(cards):
+    total, aces = 0, 0
     for c in cards:
-        total += 10 if c in ["J","Q","K"] else 11 if c=="A" else int(c)
-        if c=="A": aces+=1
-    while total>21 and aces: total-=10; aces-=1
+        if c in ["J","Q","K"]:
+            total += 10
+        elif c == "A":
+            total += 11
+            aces += 1
+        else:
+            total += int(c)
+    while total > 21 and aces:
+        total -= 10
+        aces -= 1
     return total
 
 class BlackjackView(View):
-    def __init__(self,user,bet,player,dealer):
-        super().__init__(timeout=60)
-        self.user,self.bet,self.player,self.dealer=user,bet,player,dealer
-    async def interaction_check(self,i): return i.user==self.user
+    def __init__(self, user: discord.User, bet: int, player_cards: list[str], dealer_cards: list[str]):
+        super().__init__(timeout=90)
+        self.user = user
+        self.bet = bet
+        self.player = player_cards
+        self.dealer = dealer_cards
+
+    async def interaction_check(self, i: discord.Interaction) -> bool:
+        if i.user.id != self.user.id:
+            await i.response.send_message(embed=emb("🚫 Not your game", "Wait for this game to finish."), ephemeral=True)
+            return False
+        return True
+
     @discord.ui.button(label="Hit", style=discord.ButtonStyle.green)
-    async def hit(self,i,b):
-        self.player.append(random.choice(deck)); total=calc_blackjack(self.player)
-        if total>21:
-            e=make_embed("🃏 Bust!",f"Your cards {self.player} ({total})\nLost ${self.bet}")
-            return await i.response.edit_message(embed=e,view=None)
-        e=make_embed("🃏 Blackjack",f"Your cards {self.player} ({total})\nDealer shows {self.dealer[0]}")
-        await i.response.edit_message(embed=e,view=self)
+    async def btn_hit(self, i: discord.Interaction, _button: Button):
+        self.player.append(random.choice(deck))
+        pt = bj_total(self.player)
+        if pt > 21:
+            # bust
+            await i.response.edit_message(
+                embed=emb("🃏 Blackjack - Busted",
+                          f"**Your:** {self.player} ({pt})\n**Dealer:** {self.dealer} ({bj_total(self.dealer)})\n\n❌ You lost **${self.bet}**."),
+                view=None
+            )
+            self.stop()
+        else:
+            await i.response.edit_message(
+                embed=emb("🃏 Blackjack",
+                          f"**Your:** {self.player} ({pt})\n**Dealer shows:** {self.dealer[0]}"),
+                view=self
+            )
+
     @discord.ui.button(label="Stand", style=discord.ButtonStyle.red)
-    async def stand(self,i,b):
-        pt=calc_blackjack(self.player); dt=calc_blackjack(self.dealer)
-        while dt<17: self.dealer.append(random.choice(deck)); dt=calc_blackjack(self.dealer)
-        if dt>21 or pt>dt: add_wallet(self.user.id,self.bet*2); res=f"✅ You win ${self.bet*2}"
-        elif pt==dt: add_wallet(self.user.id,self.bet); res="🤝 Tie, bet returned"
-        else: res=f"❌ You lost ${self.bet}"
-        e=make_embed("🃏 Result",f"Your {self.player} ({pt})\nDealer {self.dealer} ({dt})\n{res}")
-        await i.response.edit_message(embed=e,view=None)
+    async def btn_stand(self, i: discord.Interaction, _button: Button):
+        pt = bj_total(self.player)
+        dt = bj_total(self.dealer)
+        while dt < 17:
+            self.dealer.append(random.choice(deck))
+            dt = bj_total(self.dealer)
+
+        if dt > 21 or pt > dt:
+            add_wallet(self.user.id, self.bet * 2)
+            result = f"✅ You win **${self.bet * 2}**!"
+        elif pt == dt:
+            add_wallet(self.user.id, self.bet)
+            result = "🤝 It's a tie. Your bet is returned."
+        else:
+            result = f"❌ You lost **${self.bet}**."
+
+        await i.response.edit_message(
+            embed=emb("🃏 Blackjack - Result",
+                      f"**Your:** {self.player} ({pt})\n**Dealer:** {self.dealer} ({dt})\n\n{result}"),
+            view=None
+        )
+        self.stop()
 
 @bot.tree.command(description="Play Blackjack")
-async def blackjack(interaction, bet:int):
-    uid=str(interaction.user.id); ensure_user(uid)
-    if bet>get_wallet(uid) or bet<=0: return await interaction.response.send_message(embed=make_embed("❌","Invalid bet"),ephemeral=True)
-    add_wallet(uid,-bet); player=[random.choice(deck),random.choice(deck)]; dealer=[random.choice(deck),random.choice(deck)]
-    view=BlackjackView(interaction.user,bet,player,dealer)
-    e=make_embed("🃏 Blackjack",f"Your {player} ({calc_blackjack(player)})\nDealer shows {dealer[0]}")
-    await interaction.response.send_message(embed=e,view=view)
+async def blackjack(interaction: discord.Interaction, bet: int):
+    if bet <= 0 or bet > get_wallet(interaction.user.id):
+        return await interaction.response.send_message(embed=emb("❌ Error", "Invalid bet."), ephemeral=True)
+    add_wallet(interaction.user.id, -bet)
+    player = [random.choice(deck), random.choice(deck)]
+    dealer = [random.choice(deck), random.choice(deck)]
+    view = BlackjackView(interaction.user, bet, player, dealer)
+    await interaction.response.send_message(
+        embed=emb("🃏 Blackjack", f"**Your:** {player} ({bj_total(player)})\n**Dealer shows:** {dealer[0]}"),
+        view=view
+    )
 
-# --- Other Casino Games (Roulette, Slots, Coinflip, Dice, HighLow) ---
+# Roulette
 @bot.tree.command(description="Roulette (red/black)")
-async def roulette(interaction, bet:int, color:str):
-    uid=str(interaction.user.id); ensure_user(uid)
-    if bet>get_wallet(uid) or bet<=0: return await interaction.response.send_message(embed=make_embed("❌","Invalid bet"))
-    if color not in ["red","black"]: return await interaction.response.send_message(embed=make_embed("❌","Choose red/black"))
-    add_wallet(uid,-bet); result=random.choice(["red","black"])
-    if result==color: add_wallet(uid,bet*2); msg=f"Landed {result}, you won ${bet*2}"
-    else: msg=f"Landed {result}, you lost ${bet}"
-    await interaction.response.send_message(embed=make_embed("🎡 Roulette",msg))
+async def roulette(interaction: discord.Interaction, color: str, bet: int):
+    color = color.lower()
+    if color not in ["red", "black"]:
+        return await interaction.response.send_message(embed=emb("❌ Error", "Pick **red** or **black**."), ephemeral=True)
+    if bet <= 0 or bet > get_wallet(interaction.user.id):
+        return await interaction.response.send_message(embed=emb("❌ Error", "Invalid bet."), ephemeral=True)
 
+    add_wallet(interaction.user.id, -bet)
+    result = random.choice(["red", "black", "green"])  # spicy green for rare big win
+    if result == color:
+        win = bet * 2
+        add_wallet(interaction.user.id, win)
+        msg = f"Ball landed on **{result}** — you won **${win}**!"
+    elif result == "green":
+        win = bet * 14
+        add_wallet(interaction.user.id, win)
+        msg = f"Ball landed on **green** 🍀 — mega win **${win}**!"
+    else:
+        msg = f"Ball landed on **{result}** — you lost **${bet}**."
+    await interaction.response.send_message(embed=emb("🎡 Roulette", msg))
+
+# Slots
 @bot.tree.command(description="Slots")
-async def slots(interaction, bet:int):
-    uid=str(interaction.user.id); ensure_user(uid)
-    if bet>get_wallet(uid) or bet<=0: return await interaction.response.send_message(embed=make_embed("❌","Invalid bet"))
-    add_wallet(uid,-bet); icons=["🍎","🍌","🍒","🍇","⭐"]; roll=[random.choice(icons) for _ in range(3)]
-    if len(set(roll))==1: win=bet*5; add_wallet(uid,win); res=f"{roll} Jackpot! Won ${win}"
-    elif len(set(roll))==2: win=bet*2; add_wallet(uid,win); res=f"{roll} Partial win! Won ${win}"
-    else: res=f"{roll} Lost ${bet}"
-    await interaction.response.send_message(embed=make_embed("🎰 Slots",res))
+async def slots(interaction: discord.Interaction, bet: int):
+    if bet <= 0 or bet > get_wallet(interaction.user.id):
+        return await interaction.response.send_message(embed=emb("❌ Error", "Invalid bet."), ephemeral=True)
+    add_wallet(interaction.user.id, -bet)
+    symbols = ["🍒", "🍋", "🍉", "⭐", "7️⃣"]
+    roll = [random.choice(symbols) for _ in range(3)]
+    if len(set(roll)) == 1:
+        win = bet * 5
+        add_wallet(interaction.user.id, win)
+        msg = f"{' '.join(roll)}\nJackpot! You won **${win}**!"
+    elif len(set(roll)) == 2:
+        win = bet * 2
+        add_wallet(interaction.user.id, win)
+        msg = f"{' '.join(roll)}\nNice! You won **${win}**."
+    else:
+        msg = f"{' '.join(roll)}\nUnlucky! You lost **${bet}**."
+    await interaction.response.send_message(embed=emb("🎰 Slots", msg))
 
-@bot.tree.command(description="Coinflip")
-async def coinflip(interaction, bet:int, choice:str):
-    uid=str(interaction.user.id); ensure_user(uid)
-    if bet>get_wallet(uid) or bet<=0: return await interaction.response.send_message(embed=make_embed("❌","Invalid bet"))
-    if choice not in ["heads","tails"]: return await interaction.response.send_message(embed=make_embed("❌","Choose heads/tails"))
-    add_wallet(uid,-bet); flip=random.choice(["heads","tails"])
-    if flip==choice: add_wallet(uid,bet*2); msg=f"Coin {flip}, you won ${bet*2}"
-    else: msg=f"Coin {flip}, you lost ${bet}"
-    await interaction.response.send_message(embed=make_embed("🪙 Coinflip",msg))
+# Coinflip
+@bot.tree.command(description="Coinflip (heads/tails)")
+async def coinflip(interaction: discord.Interaction, choice: str, bet: int):
+    choice = choice.lower()
+    if choice not in ["heads", "tails"]:
+        return await interaction.response.send_message(embed=emb("❌ Error", "Pick **heads** or **tails**."), ephemeral=True)
+    if bet <= 0 or bet > get_wallet(interaction.user.id):
+        return await interaction.response.send_message(embed=emb("❌ Error", "Invalid bet."), ephemeral=True)
+    add_wallet(interaction.user.id, -bet)
+    res = random.choice(["heads", "tails"])
+    if res == choice:
+        add_wallet(interaction.user.id, bet * 2)
+        msg = f"Coin landed **{res}** — you won **${bet * 2}**!"
+    else:
+        msg = f"Coin landed **{res}** — you lost **${bet}**."
+    await interaction.response.send_message(embed=emb("🪙 Coinflip", msg))
 
+# Dice
 @bot.tree.command(description="Dice (guess 1-6)")
-async def dice(interaction, bet:int, guess:int):
-    uid=str(interaction.user.id); ensure_user(uid)
-    if bet>get_wallet(uid) or bet<=0 or guess not in range(1,7): return await interaction.response.send_message(embed=make_embed("❌","Invalid"))
-    add_wallet(uid,-bet); roll=random.randint(1,6)
-    if roll==guess: win=bet*6; add_wallet(uid,win); msg=f"Rolled {roll}, correct! Won ${win}"
-    else: msg=f"Rolled {roll}, lost ${bet}"
-    await interaction.response.send_message(embed=make_embed("🎲 Dice",msg))
+async def dice(interaction: discord.Interaction, guess: int, bet: int):
+    if guess < 1 or guess > 6:
+        return await interaction.response.send_message(embed=emb("❌ Error", "Guess must be 1–6."), ephemeral=True)
+    if bet <= 0 or bet > get_wallet(interaction.user.id):
+        return await interaction.response.send_message(embed=emb("❌ Error", "Invalid bet."), ephemeral=True)
+    add_wallet(interaction.user.id, -bet)
+    roll = random.randint(1, 6)
+    if roll == guess:
+        win = bet * 6
+        add_wallet(interaction.user.id, win)
+        msg = f"Rolled **{roll}** — correct! You won **${win}**!"
+    else:
+        msg = f"Rolled **{roll}** — you lost **${bet}**."
+    await interaction.response.send_message(embed=emb("🎲 Dice", msg))
 
-@bot.tree.command(description="HighLow (guess)")
-async def highlow(interaction, bet:int, guess:str):
-    uid=str(interaction.user.id); ensure_user(uid)
-    if bet>get_wallet(uid) or bet<=0: return await interaction.response.send_message(embed=make_embed("❌","Invalid bet"))
-    if guess not in ["high","low"]: return await interaction.response.send_message(embed=make_embed("❌","Choose high/low"))
-    add_wallet(uid,-bet); roll=random.randint(1,100); result="high" if roll>50 else "low"
-    if guess==result: win=bet*2; add_wallet(uid,win); msg=f"{roll} ({result}), you won ${win}"
-    else: msg=f"{roll} ({result}), lost ${bet}"
-    await interaction.response.send_message(embed=make_embed("🎯 HighLow",msg))
+# HighLow
+@bot.tree.command(description="HighLow (guess high/low on 1–100)")
+async def highlow(interaction: discord.Interaction, guess: str, bet: int):
+    guess = guess.lower()
+    if guess not in ["high", "low"]:
+        return await interaction.response.send_message(embed=emb("❌ Error", "Guess **high** or **low**."), ephemeral=True)
+    if bet <= 0 or bet > get_wallet(interaction.user.id):
+        return await interaction.response.send_message(embed=emb("❌ Error", "Invalid bet."), ephemeral=True)
+    add_wallet(interaction.user.id, -bet)
+    roll = random.randint(1, 100)
+    res = "high" if roll > 50 else "low"
+    if guess == res:
+        add_wallet(interaction.user.id, bet * 2)
+        msg = f"Number **{roll}** ({res}) — you won **${bet * 2}**!"
+    else:
+        msg = f"Number **{roll}** ({res}) — you lost **${bet}**."
+    await interaction.response.send_message(embed=emb("🎯 HighLow", msg))
 
-# --- Ticket System ---
-@bot.tree.command(description="Set ticket log channel")
+# =========================
+# Ticket system
+# =========================
+class TicketPanel(View):
+    def __init__(self):
+        super().__init__(timeout=None)
+        self.add_item(Button(label="Create Ticket", style=discord.ButtonStyle.primary, custom_id="ticket_create"))
+
+    @discord.ui.button(label="Create Ticket", style=discord.ButtonStyle.primary, custom_id="ticket_create_real")
+    async def _hidden(self, i: discord.Interaction, _btn: Button):
+        pass  # never shown (we build a dynamic one below)
+
+@bot.tree.command(description="Send the ticket panel here")
 @app_commands.default_permissions(administrator=True)
-async def setticketlog(interaction, channel: discord.TextChannel):
-    config["ticket_log_channel"]=channel.id; save_data()
-    await interaction.response.send_message(embed=make_embed("✅","Ticket log set."))
+async def ticketpanel(interaction: discord.Interaction, title: str = "🎟️ Support Tickets", message: str = "Press the button to open a private ticket."):
+    class _Panel(View):
+        def __init__(self):
+            super().__init__(timeout=None)
+        @discord.ui.button(label="Create Ticket", style=discord.ButtonStyle.primary, emoji="🎟️")
+        async def create(self, i: discord.Interaction, _b: Button):
+            guild = i.guild
+            opener = i.user
+            # Create channel with restricted perms
+            overwrites = {
+                guild.default_role: discord.PermissionOverwrite(view_channel=False),
+                opener: discord.PermissionOverwrite(view_channel=True, send_messages=True, read_message_history=True),
+                guild.me: discord.PermissionOverwrite(view_channel=True, send_messages=True, read_message_history=True),
+            }
+            # Attempt to allow roles with Manage Messages as "staff"
+            for role in guild.roles:
+                if role.permissions.manage_messages:
+                    overwrites[role] = discord.PermissionOverwrite(view_channel=True, send_messages=True, read_message_history=True)
 
-@bot.tree.command(description="Log a ticket manually")
+            ch = await guild.create_text_channel(
+                name=f"ticket-{opener.name[:20].lower()}-{random.randint(1000,9999)}",
+                overwrites=overwrites,
+                category=i.channel.category if isinstance(i.channel, discord.TextChannel) else None
+            )
+            tickets[str(ch.id)] = {"opener_id": opener.id, "opened_at": int(time.time())}
+            save_data()
+
+            await ch.send(embed=emb("🎟️ Ticket Opened", f"{opener.mention} created this ticket.\nA staff member will be with you shortly."))
+            await i.response.send_message(embed=emb("✅ Ticket Created", f"Ticket created: {ch.mention}"), ephemeral=True)
+
+            # Log to ticket log channel if set
+            log = get_log_channel()
+            if log:
+                await log.send(embed=emb("🆕 Ticket", f"{opener.mention} opened {ch.mention}"))
+
+    await interaction.response.send_message(embed=emb(title, message), view=_Panel())
+
+@bot.tree.command(description="Close the current ticket channel")
 @app_commands.default_permissions(manage_messages=True)
-async def logticket(interaction, staff:discord.Member, ticket_channel:discord.TextChannel, count:int):
-    tid=str(ticket_channel.id); tickets.setdefault(tid,{})
-    tickets[tid][str(staff.id)]=tickets[tid].get(str(staff.id),0)+count; save_data()
-    if (ch_id:=config.get("ticket_log_channel")) and (ch:=bot.get_channel(ch_id)):
-        await ch.send(embed=make_embed("📝 Ticket Logged",f"{staff.mention} logged {count} in {ticket_channel.mention}"))
-    await interaction.response.send_message(embed=make_embed("✅","Ticket logged"),ephemeral=True)
+async def closeticket(interaction: discord.Interaction, reason: str = "No reason provided"):
+    ch = interaction.channel
+    if not isinstance(ch, discord.TextChannel):
+        return await interaction.response.send_message(embed=emb("❌ Error", "Use this inside the ticket channel."), ephemeral=True)
 
-# --- Run ---
+    info = tickets.pop(str(ch.id), None)
+    save_data()
+    await interaction.response.send_message(embed=emb("✅ Ticket Closed", f"Reason: {reason}"))
+    log = get_log_channel()
+    if log:
+        opener = f"<@{info['opener_id']}>" if info else "Unknown"
+        await log.send(embed=emb("🧾 Ticket Closed", f"Channel: {ch.mention}\nOpener: {opener}\nClosed by: {interaction.user.mention}\nReason: {reason}"))
+    try:
+        await ch.delete(reason=f"Ticket closed by {interaction.user}")
+    except discord.Forbidden:
+        pass
+
+@bot.tree.command(description="Set the ticket log channel")
+@app_commands.default_permissions(administrator=True)
+async def setticketlog(interaction: discord.Interaction, channel: discord.TextChannel):
+    config["ticket_log_channel"] = channel.id
+    save_data()
+    await interaction.response.send_message(embed=emb("✅ Set", f"Ticket log channel → {channel.mention}"))
+
+@bot.tree.command(description="Manually log a ticket amount for staff")
+@app_commands.default_permissions(manage_messages=True)
+async def logticket(interaction: discord.Interaction, staff: discord.Member, count: int = 1):
+    if count <= 0:
+        return await interaction.response.send_message(embed=emb("❌ Error", "Count must be > 0."), ephemeral=True)
+    sid = str(staff.id)
+    ticket_counts[sid] = ticket_counts.get(sid, 0) + count
+    save_data()
+    log = get_log_channel()
+    if log:
+        await log.send(embed=emb("📝 Ticket Logged", f"{staff.mention} +{count} tickets (total: {ticket_counts[sid]})."))
+    await interaction.response.send_message(embed=emb("✅ Logged", f"{staff.mention} now has **{ticket_counts[sid]}** logged tickets."), ephemeral=True)
+
+# =========================
+# !cmds (prefix) shows slash commands
+# =========================
+@bot.command(name="cmds")
+async def cmds(ctx: commands.Context):
+    lines = [
+        "**Moderation**: `/ban`, `/kick`, `/mute`, `/unmute`, `/nick`, `/say`, `/addrole`, `/removerole`",
+        "**Welcome/Goodbye**: `/setwelcome`, `/setgoodbye`",
+        "**Economy**: `/balance`, `/daily`, `/work`, `/steal`, `/deposit`, `/withdraw`, `/send`, `/leaderboard`",
+        "**Admin Economy**: `/addcash`, `/resetcash`, `/resetcashall`",
+        "**Casino**: `/blackjack`, `/roulette`, `/slots`, `/coinflip`, `/dice`, `/highlow`",
+        "**Tickets**: `/ticketpanel`, `/closeticket`, `/setticketlog`, `/logticket`",
+    ]
+    await ctx.send(embed=emb("📜 Commands", "\n".join(lines)))
+
+# =========================
+# Run
+# =========================
+if not TOKEN:
+    raise RuntimeError("DISCORD_TOKEN environment variable is not set.")
 bot.run(TOKEN)
