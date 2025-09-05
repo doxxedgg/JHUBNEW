@@ -186,6 +186,27 @@ async def resetcashall(interaction):
         await ch.send(embed=make_embed("♻️ Reset Log", f"{interaction.user.mention} reset ALL balances."))
     await interaction.response.send_message(embed=make_embed("♻️ Reset Cash", "All balances reset."))
 
+# --- Add Cash Command ---
+@bot.tree.command(description="Admin: Add cash to a player's wallet")
+@app_commands.default_permissions(administrator=True)
+async def addcash(interaction, member: discord.Member, amount: int):
+    if amount == 0:
+        await interaction.response.send_message(embed=make_embed("❌ Error", "Amount must not be 0."), ephemeral=True)
+        return
+
+    add_wallet(member.id, amount)
+    action = "added to" if amount > 0 else "removed from"
+    msg = f"${abs(amount)} {action} {member.mention}'s wallet."
+
+    # Log to ticket_log_channel if set
+    log_ch = bot.get_channel(config.get("ticket_log_channel"))
+    if log_ch:
+        await log_ch.send(embed=make_embed("💰 Cash Adjustment Log", f"Admin {interaction.user.mention} {action} {abs(amount)} for {member.mention}."))
+
+    await interaction.response.send_message(embed=make_embed("💰 Cash Adjusted", msg))
+
+
+
 # --- Casino: Blackjack ---
 deck = [str(x) for x in range(2,11)] + ["J","Q","K","A"]
 def calc_blackjack(cards):
