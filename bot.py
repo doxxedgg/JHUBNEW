@@ -272,9 +272,7 @@ async def leaderboard(interaction: discord.Interaction):
         lines.append(f"{i}. <@{uid}> — ${total}")
     await interaction.response.send_message(embed=emb("🏆 Leaderboard", "\n".join(lines)))
 
-# =========================
-# Admin economy (with logging)
-# =========================
+
 def get_log_channel():
     ch_id = config.get("ticket_log_channel")
     return bot.get_channel(ch_id) if ch_id else None
@@ -313,9 +311,7 @@ async def resetcashall(interaction: discord.Interaction):
         await log.send(embed=emb("♻️ Reset Cash Log", f"{interaction.user.mention} reset **ALL** players' cash."))
     await interaction.response.send_message(embed=emb("♻️ Reset Cash", "All players' cash reset."))
 
-# =========================
-# Casino
-# =========================
+
 # Blackjack
 deck = [str(x) for x in range(2, 11)] + ["J", "Q", "K", "A"]
 
@@ -420,7 +416,7 @@ async def roulette(interaction: discord.Interaction, color: str, bet: int):
         add_wallet(interaction.user.id, win)
         msg = f"Ball landed on **{result}** — you won **${win}**!"
     elif result == "green":
-        win = bet * 14
+        win = bet * 5
         add_wallet(interaction.user.id, win)
         msg = f"Ball landed on **green** 🍀 — mega win **${win}**!"
     else:
