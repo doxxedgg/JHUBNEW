@@ -166,7 +166,7 @@ async def daily(interaction: discord.Interaction):
             embed=emb("⏳ Daily Cooldown", f"Come back in {remaining//3600}h {(remaining%3600)//60}m."),
             ephemeral=True
         )
-    reward = random.randint(150, 300)
+    reward = random.randint(2500, 50000)
     add_wallet(interaction.user.id, reward)
     u["last_daily"] = now; save_data()
     await interaction.response.send_message(embed=emb("🎁 Daily", f"You received **${reward}**!"))
