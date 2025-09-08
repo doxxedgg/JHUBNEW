@@ -203,7 +203,7 @@ async def steal(interaction: discord.Interaction, member: discord.Member):
         return await interaction.response.send_message(embed=emb("❌ Failed", "Target is too poor."), ephemeral=True)
 
     if random.random() < 0.5:
-        amt = random.randint(20, min(120, t["wallet"]))
+        amt = random.randint(20, min(5000, t["wallet"]))
         add_wallet(interaction.user.id, amt)
         add_wallet(member.id, -amt)
         msg = f"💰 You stole **${amt}** from {member.mention}!"
@@ -391,7 +391,7 @@ async def roulette(interaction: discord.Interaction, color: str, bet: int):
         return await interaction.response.send_message(embed=emb("❌ Error", "Invalid bet."), ephemeral=True)
 
     add_wallet(interaction.user.id, -bet)
-    result = random.choices(["red", "black", "green"], weights=[80, 15, 5], k=1)[0]  # 80% red, 15% black, 5% green
+    result = random.choices(["red", "black", "green"], weights=[80, 15, 5], k=1)[0]  # 50% red, 50% black, 3% green
     if result == color:
         win = bet * 2
         add_wallet(interaction.user.id, win)
