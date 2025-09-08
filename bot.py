@@ -5,16 +5,16 @@ from discord.ui import View, Button
 import random, time, json, os
 from datetime import timedelta
 
-# =========================
+$# =========================$
 # Config
-# =========================
+$# =========================$
 TOKEN = os.environ.get("DISCORD_TOKEN")
 DATA_FILE = "data.json"
 START_BALANCE = 500
 
-# =========================
+$# =========================$
 # Data setup (auto-create)
-# =========================
+$# =========================$
 if not os.path.exists(DATA_FILE):
     with open(DATA_FILE, "w") as f:
         json.dump(
@@ -59,9 +59,9 @@ def set_bank(uid, amt):
 def add_wallet(uid, amt):
     u = ensure_user(uid); u["wallet"] = int(u["wallet"] + int(amt)); save_data()
 
-# =========================
+$# =========================$
 # Bot setup
-# =========================
+$# =========================$
 intents = discord.Intents.default()
 intents.members = True
 intents.message_content = False  # we only need prefix for !cmds
@@ -70,9 +70,9 @@ bot = commands.Bot(command_prefix="!", intents=intents)
 def emb(title, desc, color=discord.Color.blurple()):
     return discord.Embed(title=title, description=desc, color=color)
 
-# =========================
+$# =========================$
 # Events
-# =========================
+$# =========================$
 @bot.event
 async def on_ready():
     await bot.tree.sync()
@@ -94,9 +94,9 @@ async def on_member_remove(member: discord.Member):
         if ch:
             await ch.send(embed=emb("👋 Goodbye", f"{member.mention} has left the server."))
 
-# =========================
+$# =========================$
 # Basic config commands
-# =========================
+$# =========================$
 @bot.tree.command(description="Set the welcome channel")
 @app_commands.default_permissions(administrator=True)
 async def setwelcome(interaction: discord.Interaction, channel: discord.TextChannel):
@@ -111,9 +111,9 @@ async def setgoodbye(interaction: discord.Interaction, channel: discord.TextChan
     save_data()
     await interaction.response.send_message(embed=emb("✅ Set", f"Goodbye channel → {channel.mention}"))
 
-# =========================
+$# =========================$
 # Moderation
-# =========================
+$# =========================$
 @bot.tree.command(description="Ban a member")
 @app_commands.default_permissions(ban_members=True)
 async def ban(interaction: discord.Interaction, member: discord.Member, reason: str = "No reason provided"):
@@ -163,9 +163,9 @@ async def removerole(interaction: discord.Interaction, member: discord.Member, r
     await member.remove_roles(role)
     await interaction.response.send_message(embed=emb("➖ Role", f"Removed {role.mention} from {member.mention}"))
 
-# =========================
+$# =========================$
 # Economy
-# =========================
+$# =========================$
 @bot.tree.command(description="Check balance (optionally another user's)")
 async def balance(interaction: discord.Interaction, member: discord.Member | None = None):
     member = member or interaction.user
@@ -272,7 +272,6 @@ async def leaderboard(interaction: discord.Interaction):
         lines.append(f"{i}. <@{uid}> — ${total}")
     await interaction.response.send_message(embed=emb("🏆 Leaderboard", "\n".join(lines)))
 
-
 def get_log_channel():
     ch_id = config.get("ticket_log_channel")
     return bot.get_channel(ch_id) if ch_id else None
@@ -311,7 +310,6 @@ async def resetcashall(interaction: discord.Interaction):
         await log.send(embed=emb("♻️ Reset Cash Log", f"{interaction.user.mention} reset **ALL** players' cash."))
     await interaction.response.send_message(embed=emb("♻️ Reset Cash", "All players' cash reset."))
 
-
 # Blackjack
 deck = [str(x) for x in range(2, 11)] + ["J", "Q", "K", "A"]
 
@@ -346,7 +344,6 @@ class BlackjackView(View):
 
     @discord.ui.button(label="Hit", style=discord.ButtonStyle.green)
     async def btn_hit(self, i: discord.Interaction, _button: Button):
-        self.player.append(random.choice(deck))
         pt = bj_total(self.player)
         if pt > 21:
             # bust
@@ -410,7 +407,7 @@ async def roulette(interaction: discord.Interaction, color: str, bet: int):
         return await interaction.response.send_message(embed=emb("❌ Error", "Invalid bet."), ephemeral=True)
 
     add_wallet(interaction.user.id, -bet)
-    result = random.choice(["red", "black", "green"])  # spicy green for rare big win
+    result = random.choices(["red", "black", "green"], weights=[80, 15, 5], k=1)[0]  # 80% red, 15% black, 5% green
     if result == color:
         win = bet * 2
         add_wallet(interaction.user.id, win)
@@ -495,99 +492,17 @@ async def highlow(interaction: discord.Interaction, guess: str, bet: int):
         msg = f"Number **{roll}** ({res}) — you lost **${bet}**."
     await interaction.response.send_message(embed=emb("🎯 HighLow", msg))
 
-# =========================
-# Ticket system
-# =========================
-class TicketPanel(View):
-    def __init__(self):
-        super().__init__(timeout=None)
-        self.add_item(Button(label="Create Ticket", style=discord.ButtonStyle.primary, custom_id="ticket_create"))
+# PP Checker
+@bot.tree.command(description="Check your pp size")
+async def ppcheck(interaction: discord.Interaction):
+    pp_size = random.randint(1, 12)
+    if pp_size < 4:
+        emoji = "🦐"  # Shrimp emoji
+    else:
+        emoji = "🍆"  # Eggplant emoji
+    await interaction.response.send_message(embed=emb("📏 PP Check", f"Your pp size is {pp_size} inches. {emoji}"))
 
-    @discord.ui.button(label="Create Ticket", style=discord.ButtonStyle.primary, custom_id="ticket_create_real")
-    async def _hidden(self, i: discord.Interaction, _btn: Button):
-        pass  # never shown (we build a dynamic one below)
-
-@bot.tree.command(description="Send the ticket panel here")
-@app_commands.default_permissions(administrator=True)
-async def ticketpanel(interaction: discord.Interaction, title: str = "🎟️ Support Tickets", message: str = "Press the button to open a private ticket."):
-    class _Panel(View):
-        def __init__(self):
-            super().__init__(timeout=None)
-        @discord.ui.button(label="Create Ticket", style=discord.ButtonStyle.primary, emoji="🎟️")
-        async def create(self, i: discord.Interaction, _b: Button):
-            guild = i.guild
-            opener = i.user
-            # Create channel with restricted perms
-            overwrites = {
-                guild.default_role: discord.PermissionOverwrite(view_channel=False),
-                opener: discord.PermissionOverwrite(view_channel=True, send_messages=True, read_message_history=True),
-                guild.me: discord.PermissionOverwrite(view_channel=True, send_messages=True, read_message_history=True),
-            }
-            # Attempt to allow roles with Manage Messages as "staff"
-            for role in guild.roles:
-                if role.permissions.manage_messages:
-                    overwrites[role] = discord.PermissionOverwrite(view_channel=True, send_messages=True, read_message_history=True)
-
-            ch = await guild.create_text_channel(
-                name=f"ticket-{opener.name[:20].lower()}-{random.randint(1000,9999)}",
-                overwrites=overwrites,
-                category=i.channel.category if isinstance(i.channel, discord.TextChannel) else None
-            )
-            tickets[str(ch.id)] = {"opener_id": opener.id, "opened_at": int(time.time())}
-            save_data()
-
-            await ch.send(embed=emb("🎟️ Ticket Opened", f"{opener.mention} created this ticket.\nA staff member will be with you shortly."))
-            await i.response.send_message(embed=emb("✅ Ticket Created", f"Ticket created: {ch.mention}"), ephemeral=True)
-
-            # Log to ticket log channel if set
-            log = get_log_channel()
-            if log:
-                await log.send(embed=emb("🆕 Ticket", f"{opener.mention} opened {ch.mention}"))
-
-    await interaction.response.send_message(embed=emb(title, message), view=_Panel())
-
-@bot.tree.command(description="Close the current ticket channel")
-@app_commands.default_permissions(manage_messages=True)
-async def closeticket(interaction: discord.Interaction, reason: str = "No reason provided"):
-    ch = interaction.channel
-    if not isinstance(ch, discord.TextChannel):
-        return await interaction.response.send_message(embed=emb("❌ Error", "Use this inside the ticket channel."), ephemeral=True)
-
-    info = tickets.pop(str(ch.id), None)
-    save_data()
-    await interaction.response.send_message(embed=emb("✅ Ticket Closed", f"Reason: {reason}"))
-    log = get_log_channel()
-    if log:
-        opener = f"<@{info['opener_id']}>" if info else "Unknown"
-        await log.send(embed=emb("🧾 Ticket Closed", f"Channel: {ch.mention}\nOpener: {opener}\nClosed by: {interaction.user.mention}\nReason: {reason}"))
-    try:
-        await ch.delete(reason=f"Ticket closed by {interaction.user}")
-    except discord.Forbidden:
-        pass
-
-@bot.tree.command(description="Set the ticket log channel")
-@app_commands.default_permissions(administrator=True)
-async def setticketlog(interaction: discord.Interaction, channel: discord.TextChannel):
-    config["ticket_log_channel"] = channel.id
-    save_data()
-    await interaction.response.send_message(embed=emb("✅ Set", f"Ticket log channel → {channel.mention}"))
-
-@bot.tree.command(description="Manually log a ticket amount for staff")
-@app_commands.default_permissions(manage_messages=True)
-async def logticket(interaction: discord.Interaction, staff: discord.Member, count: int = 1):
-    if count <= 0:
-        return await interaction.response.send_message(embed=emb("❌ Error", "Count must be > 0."), ephemeral=True)
-    sid = str(staff.id)
-    ticket_counts[sid] = ticket_counts.get(sid, 0) + count
-    save_data()
-    log = get_log_channel()
-    if log:
-        await log.send(embed=emb("📝 Ticket Logged", f"{staff.mention} +{count} tickets (total: {ticket_counts[sid]})."))
-    await interaction.response.send_message(embed=emb("✅ Logged", f"{staff.mention} now has **{ticket_counts[sid]}** logged tickets."), ephemeral=True)
-
-# =========================
 # !cmds (prefix) shows slash commands
-# =========================
 @bot.command(name="cmds")
 async def cmds(ctx: commands.Context):
     lines = [
@@ -596,13 +511,11 @@ async def cmds(ctx: commands.Context):
         "**Economy**: `/balance`, `/daily`, `/work`, `/steal`, `/deposit`, `/withdraw`, `/send`, `/leaderboard`",
         "**Admin Economy**: `/addcash`, `/resetcash`, `/resetcashall`",
         "**Casino**: `/blackjack`, `/roulette`, `/slots`, `/coinflip`, `/dice`, `/highlow`",
-        "**Tickets**: `/ticketpanel`, `/closeticket`, `/setticketlog`, `/logticket`",
+        "**PP Check**: `/ppcheck`"
     ]
     await ctx.send(embed=emb("📜 Commands", "\n".join(lines)))
 
-# =========================
 # Run
-# =========================
 if not TOKEN:
     raise RuntimeError("DISCORD_TOKEN environment variable is not set.")
 bot.run(TOKEN)
