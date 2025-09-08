@@ -5,16 +5,12 @@ from discord.ui import View, Button
 import random, time, json, os
 from datetime import timedelta
 
- =========================
-# Config
- =========================
+
 TOKEN = os.environ.get("DISCORD_TOKEN")
 DATA_FILE = "data.json"
 START_BALANCE = 500
 
-# =========================
-# Data setup (auto-create)
-# =========================
+
 if not os.path.exists(DATA_FILE):
     with open(DATA_FILE, "w") as f:
         json.dump(
@@ -59,9 +55,7 @@ def set_bank(uid, amt):
 def add_wallet(uid, amt):
     u = ensure_user(uid); u["wallet"] = int(u["wallet"] + int(amt)); save_data()
 
-# =========================
-# Bot setup
-=========================
+
 intents = discord.Intents.default()
 intents.members = True
 intents.message_content = False  # we only need prefix for !cmds
@@ -70,9 +64,6 @@ bot = commands.Bot(command_prefix="!", intents=intents)
 def emb(title, desc, color=discord.Color.blurple()):
     return discord.Embed(title=title, description=desc, color=color)
 
-=========================
-# Events
-# =========================
 @bot.event
 async def on_ready():
     await bot.tree.sync()
@@ -93,9 +84,7 @@ async def on_member_remove(member: discord.Member):
         ch = bot.get_channel(ch_id)
         if ch:
             await ch.send(embed=emb("👋 Goodbye", f"{member.mention} has left the server."))
-# =========================
-# Basic config commands
-# =========================
+
 @bot.tree.command(description="Set the welcome channel")
 @app_commands.default_permissions(administrator=True)
 async def setwelcome(interaction: discord.Interaction, channel: discord.TextChannel):
@@ -110,9 +99,7 @@ async def setgoodbye(interaction: discord.Interaction, channel: discord.TextChan
     save_data()
     await interaction.response.send_message(embed=emb("✅ Set", f"Goodbye channel → {channel.mention}"))
 
-# =========================
-# Moderation
-# =========================
+
 @bot.tree.command(description="Ban a member")
 @app_commands.default_permissions(ban_members=True)
 async def ban(interaction: discord.Interaction, member: discord.Member, reason: str = "No reason provided"):
@@ -162,9 +149,7 @@ async def removerole(interaction: discord.Interaction, member: discord.Member, r
     await member.remove_roles(role)
     await interaction.response.send_message(embed=emb("➖ Role", f"Removed {role.mention} from {member.mention}"))
 
-$# =========================$
-# Economy
-$# =========================$
+
 @bot.tree.command(description="Check balance (optionally another user's)")
 async def balance(interaction: discord.Interaction, member: discord.Member | None = None):
     member = member or interaction.user
