@@ -1,9 +1,10 @@
 import discord
 from discord import app_commands
 from discord.ext import commands
-from discord.ui import View, Button
+from discord.ui import View, Button, Modal, TextInput
 import random, time, json, os
-from datetime import timedelta, datetime
+from datetime import timedelta
+
 
 TOKEN = os.environ.get("DISCORD_TOKEN")
 DATA_FILE = "data.json"
