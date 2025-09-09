@@ -1,1 +1,13 @@
+{
+    "balances": {},
+    "config": {
+        "welcome_channel": null,
+        "goodbye_channel": null,
+        "ticket_staff_role": null,
+        "update_channel": null
+    },
+    "tickets": {},
+    "ticket_counts": {},
+    "levels": {}
+}
 
