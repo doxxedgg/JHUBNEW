@@ -448,5 +448,11 @@ async def highlow(interaction: discord.Interaction, guess: str, bet: int):
         msg = f"Number **{roll}** ({res}) — you lost **${bet}**."
     await interaction.response.send_message(embed=emb("🎯 HighLow", msg))
 
-TOKEN = "YOUR_TOKEN_HERE"
-bot.run(TOKEN)
+
+
+if __name__ == "__main__":
+    token = os.getenv("DISCORD_TOKEN")
+    if not token:
+        print("❌ Error: DISCORD_TOKEN environment variable not found.")
+        exit(1)
+    bot.run(token)
