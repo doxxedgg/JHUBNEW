@@ -9,7 +9,7 @@ TOKEN = os.environ.get("DISCORD_TOKEN")
 DATA_FILE = "data.json"
 START_BALANCE = 500
 XP_PER_MESSAGE = 10
-LEVEL_MULTIPLIER = 100
+LEVEL_MULTIPLIER = 2
 
 # ----------------- DATA -----------------
 if not os.path.exists(DATA_FILE):
